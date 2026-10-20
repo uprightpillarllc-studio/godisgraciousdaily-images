@@ -1,0 +1,62 @@
+name: Daily Instagram post
+
+on:
+  schedule:
+    - cron: "5 13 * * *"   # 6:05 AM Pacific during daylight saving time
+    - cron: "5 14 * * *"   # 6:05 AM Pacific during standard time (Nov-Mar)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Post today's folder right now (skip the 6 AM check)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: instagram-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    env:
+      FORCE: ${{ inputs.force || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+
+      - name: Convert PNG cards to JPG
+        id: prepare
+        run: |
+          pip install --quiet pillow
+          python post.py prepare
+
+      - name: Save converted images
+        if: steps.prepare.outputs.converted == 'true'
+        run: |
+          git add -A posts
+          git commit -m "Convert $(TZ=America/Los_Angeles date +%F) cards to JPG"
+          git push
+
+      - name: Publish today's post
+        id: post
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: python post.py
+
+      - name: Mark today as posted
+        if: steps.post.outputs.posted == 'true'
+        run: |
+          git add posts
+          git commit -m "Mark $(TZ=America/Los_Angeles date +%F) as posted"
+          git push
