@@ -53,6 +53,22 @@ def set_output(name, value):
             f.write(f"{name}={value}\n")
 
 
+# ---------- step 0: wait until 6 AM ----------
+
+def wait():
+    """GitHub often starts scheduled runs hours late, so the first run of the
+    day is scheduled around 1 AM and simply waits here until 6:00 AM Pacific."""
+    if os.environ.get("FORCE", "false").lower() == "true":
+        return
+    now = datetime.now(TZ)
+    target = now.replace(hour=POST_HOUR, minute=0, second=0, microsecond=0)
+    if now < target:
+        seconds = (target - now).total_seconds()
+        print(f"It's {now:%H:%M} Pacific. Waiting {seconds / 3600:.1f} hours until {POST_HOUR}:00 AM ...")
+        time.sleep(seconds)
+    print("Ready to post.")
+
+
 # ---------- step 1: convert PNGs to JPG ----------
 
 def prepare():
@@ -174,4 +190,5 @@ def publish():
 
 
 if __name__ == "__main__":
-    prepare() if sys.argv[1:] == ["prepare"] else publish()
+    step = sys.argv[1] if len(sys.argv) > 1 else "publish"
+    {"wait": wait, "prepare": prepare, "publish": publish}[step]()
