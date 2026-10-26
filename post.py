@@ -4,6 +4,10 @@ Each day's post lives in its own folder named with the date (Pacific time):
     posts/2026-10-21/card.png         <- one image = a single post
     posts/2026-10-21/caption.txt      <- the caption (optional)
 
+For a Reel, put one .mp4 video in the folder (it takes priority over any images).
+GitHub Pages must be on (Settings > Pages > Deploy from a branch > main, root) so
+Instagram can fetch the video.
+
 For a carousel, put 2-10 images in the folder. They post in name order:
     posts/2026-10-25/slide1.png, slide2.png, slide3.png ...
 
@@ -75,6 +79,9 @@ def prepare():
     now, folder = today_folder()
     if not should_run(now, folder):
         return
+    if any(folder.glob("*.mp4")):
+        print("Today is a Reel (video) day. No images to convert.")
+        return
     from PIL import Image
 
     converted = 0
@@ -112,25 +119,29 @@ def call(method, path, params):
         sys.exit(f"Instagram API error ({e.code}) on '{path.split('/')[-1]}': {body}")
 
 
-def wait_until_public(url):
-    for _ in range(12):
+def wait_until_public(url, video=False):
+    for _ in range(30):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=30):
                 return
         except urllib.error.URLError:
-            time.sleep(5)
+            time.sleep(10)
+    if video:
+        sys.exit(f"The video isn't reachable at {url}. Turn on GitHub Pages: Settings > Pages > "
+                 "Deploy from a branch > main, / (root) > Save, then run the workflow again.")
     sys.exit(f"The image isn't reachable yet at {url}. Is the repository public?")
 
 
 def wait_until_ready(container_id, token):
-    for _ in range(30):
-        status = call("GET", container_id, {"fields": "status_code", "access_token": token}).get("status_code")
+    for _ in range(60):  # up to 5 minutes; videos take longer than images
+        info = call("GET", container_id, {"fields": "status_code,status", "access_token": token})
+        status = info.get("status_code")
         if status == "FINISHED":
             return
         if status in ("ERROR", "EXPIRED"):
-            sys.exit(f"Instagram could not process the image (status: {status}).")
+            sys.exit(f"Instagram could not process the media (status: {status}, detail: {info.get('status')}).")
         time.sleep(5)
-    sys.exit("Timed out waiting for Instagram to process the image.")
+    sys.exit("Timed out waiting for Instagram to process the media.")
 
 
 def publish():
@@ -142,10 +153,11 @@ def publish():
     if not should_run(now, folder):
         return
 
+    videos = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".mp4")
     images = sorted(p for p in folder.iterdir() if p.suffix.lower() in (".jpg", ".jpeg"))
-    if not images:
+    if not videos and not images:
         sys.exit(f"posts/{folder.name} has no images. Add a .png or .jpg card.")
-    if len(images) > 10:
+    if not videos and len(images) > 10:
         sys.exit(f"posts/{folder.name} has {len(images)} images; a carousel can have at most 10.")
 
     caption_file = folder / "caption.txt"
@@ -159,15 +171,31 @@ def publish():
     def url_for(p):
         return f"https://raw.githubusercontent.com/{repo}/{branch}/{urllib.parse.quote(p.as_posix())}"
 
-    for p in images:
-        wait_until_public(url_for(p))
+    owner, name = repo.split("/")
+
+    def pages_url_for(p):
+        # GitHub Pages serves .mp4 as video/mp4, which Instagram needs for Reels
+        return f"https://{owner.lower()}.github.io/{name}/{urllib.parse.quote(p.as_posix())}"
+
+    if videos:
+        wait_until_public(pages_url_for(videos[0]), video=True)
+    else:
+        for p in images:
+            wait_until_public(url_for(p))
 
     me = call("GET", "me", {"fields": "user_id,username", "access_token": token})
     ig_id = me.get("user_id") or me["id"]
-    kind = "single image" if len(images) == 1 else f"{len(images)}-slide carousel"
+    if videos:
+        kind = "Reel"
+    else:
+        kind = "single image" if len(images) == 1 else f"{len(images)}-slide carousel"
     print(f"Posting a {kind} to @{me.get('username')} ...")
 
-    if len(images) == 1:
+    if videos:
+        container = call("POST", f"{ig_id}/media",
+                         {"media_type": "REELS", "video_url": pages_url_for(videos[0]),
+                          "caption": caption, "access_token": token})["id"]
+    elif len(images) == 1:
         container = call("POST", f"{ig_id}/media",
                          {"image_url": url_for(images[0]), "caption": caption, "access_token": token})["id"]
     else:
