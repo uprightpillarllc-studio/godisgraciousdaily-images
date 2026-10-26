@@ -1,9 +1,15 @@
 name: Daily Instagram post
 
+# GitHub often starts scheduled runs hours late. So the first run starts around
+# 1 AM and waits until 6:00 AM Pacific to post. The later times are backups:
+# if a post already went out, they see posted.txt and do nothing.
 on:
   schedule:
-    - cron: "5 13 * * *"   # 6:05 AM Pacific during daylight saving time
-    - cron: "5 14 * * *"   # 6:05 AM Pacific during standard time (Nov-Mar)
+    - cron: "47 8 * * *"    # ~1:47 AM PDT / 12:47 AM PST  (waits until 6:00)
+    - cron: "17 11 * * *"   # ~4:17 AM PDT / 3:17 AM PST   (waits until 6:00)
+    - cron: "17 13 * * *"   # backup
+    - cron: "47 14 * * *"   # backup
+    - cron: "17 17 * * *"   # backup
   workflow_dispatch:
     inputs:
       force:
@@ -21,12 +27,13 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     env:
       FORCE: ${{ inputs.force || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -34,6 +41,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+
+      - name: Wait until 6 AM Pacific
+        run: |
+          python post.py wait
+          git pull --ff-only
 
       - name: Convert PNG cards to JPG
         id: prepare
@@ -52,7 +64,7 @@ jobs:
         id: post
         env:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-        run: python post.py
+        run: python post.py publish
 
       - name: Mark today as posted
         if: steps.post.outputs.posted == 'true'
